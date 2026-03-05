@@ -726,6 +726,81 @@ def _row_name_email_offer(row: pd.Series) -> str:
     return base
 
 
+def three_meetings_schedule_to_dataframe(result: dict | None) -> pd.DataFrame:
+    """
+    Build a DataFrame of the three-meetings schedule for CSV/Google Sheets export.
+    Columns: Name, Email, Choice, Meeting 1, Meeting 2, Meeting 3.
+    Returns empty DataFrame if result is None.
+    """
+    if result is None or not result.get("person_to_days"):
+        return pd.DataFrame(columns=["Name", "Email", "Choice", "Meeting 1", "Meeting 2", "Meeting 3"])
+    cohort = result["cohort_df"]
+    person_to_days = result["person_to_days"]
+    slot_label = result["split_slot_label"]
+    name_col = APPLICANT_COL if APPLICANT_COL in cohort.columns else "name"
+    email_col = "EMAIL Address" if "EMAIL Address" in cohort.columns else "EMAIL"
+    meeting_1_label = f"Friday 9am–11am PT"
+    rows = []
+    for idx in person_to_days:
+        row = cohort.loc[idx]
+        name = row.get(name_col, "?")
+        email = row.get(email_col, "")
+        offer = row.get("OFFER", "")
+        d1, d2 = person_to_days[idx]
+        meeting_2 = f"{d1} {slot_label}"
+        meeting_3 = f"{d2} {slot_label}"
+        rows.append({
+            "Name": name,
+            "Email": email if pd.notna(email) else "",
+            "Choice": offer if pd.notna(offer) else "",
+            "Meeting 1": meeting_1_label,
+            "Meeting 2": meeting_2,
+            "Meeting 3": meeting_3,
+        })
+    return pd.DataFrame(rows)
+
+
+def three_meetings_schedule_by_meeting_to_dataframe(result: dict | None) -> pd.DataFrame:
+    """
+    Build a DataFrame of the schedule grouped by meeting for Google Sheets.
+    Each row = one attendee in one meeting. Columns: Meeting, Day & Time, Name, Email, Choice.
+    Enables filtering by meeting to see each grouping and its attendees.
+    """
+    if result is None:
+        return pd.DataFrame(columns=["Meeting", "Day & Time", "Name", "Email", "Choice"])
+    name_col = APPLICANT_COL if APPLICANT_COL in result["cohort_df"].columns else "name"
+    email_col = "EMAIL Address" if "EMAIL Address" in result["cohort_df"].columns else "EMAIL"
+    anchor_label = f"{ANCHOR_DAY} at {SLOT_LABELS.get(ANCHOR_SLOT_COL, ANCHOR_SLOT_COL)}"
+    slot_label = result["split_slot_label"]
+    rows = []
+    # Meeting 1: full cohort (Friday 9am).
+    for _, row in result["anchor_available_df"].iterrows():
+        rows.append({
+            "Meeting": "Meeting 1 (everyone)",
+            "Day & Time": anchor_label,
+            "Name": row.get(name_col, "?"),
+            "Email": row.get(email_col, "") if pd.notna(row.get(email_col, "")) else "",
+            "Choice": row.get("OFFER", "") if pd.notna(row.get("OFFER", "")) else "",
+        })
+    # Meetings 2–5: weekday split meetings.
+    for day in WEEKDAYS_NO_FRIDAY:
+        df = result["day_to_df"][day]
+        if len(df) == 0:
+            continue
+        day_time = f"{day} at {slot_label}"
+        meeting_num = {"Monday": 2, "Tuesday": 3, "Wednesday": 4, "Thursday": 5}[day]
+        meeting_name = f"Meeting {meeting_num} ({day})"
+        for _, row in df.iterrows():
+            rows.append({
+                "Meeting": meeting_name,
+                "Day & Time": day_time,
+                "Name": row.get(name_col, "?"),
+                "Email": row.get(email_col, "") if pd.notna(row.get(email_col, "")) else "",
+                "Choice": row.get("OFFER", "") if pd.notna(row.get("OFFER", "")) else "",
+            })
+    return pd.DataFrame(rows)
+
+
 def format_three_meeting_report(partition: dict | None, cohort_name: str = "Cohort A + Either") -> str:
     """Format a readable report for the three-meeting (1 full + 2 split) schedule."""
     if partition is None:

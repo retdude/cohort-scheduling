@@ -18,6 +18,8 @@ from load_form_data import (
     is_fittable_for_three_meetings,
     find_three_meetings_each,
     format_three_meetings_each_report,
+    three_meetings_schedule_to_dataframe,
+    three_meetings_schedule_by_meeting_to_dataframe,
 )
 
 # Target cohort size (boss requirement). Can override with -n.
@@ -65,6 +67,18 @@ def main():
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(report, encoding="utf-8")
         print(f"Report written to {out}")
+        # Export schedule CSVs for Google Sheets.
+        base = out.with_suffix("")
+        schedule_df = three_meetings_schedule_to_dataframe(result)
+        if not schedule_df.empty:
+            csv_path = base.with_suffix(".csv")
+            schedule_df.to_csv(csv_path, index=False, encoding="utf-8")
+            print(f"Schedule CSV (by person) written to {csv_path}")
+        by_meeting_df = three_meetings_schedule_by_meeting_to_dataframe(result)
+        if not by_meeting_df.empty:
+            by_meeting_path = base.parent / f"{base.name}_by_meeting.csv"
+            by_meeting_df.to_csv(by_meeting_path, index=False, encoding="utf-8")
+            print(f"Schedule CSV (by meeting / groupings) written to {by_meeting_path}")
     else:
         print(report)
     return report
