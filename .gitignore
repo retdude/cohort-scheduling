@@ -1,0 +1,10 @@
+# Virtual environment and Python cache
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/__pycache__/
+
+# Local data and generated reports (optional: remove to track)
+reports/
+data/
