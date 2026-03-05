@@ -44,8 +44,9 @@ def main():
     cohort_a = cohort_a.drop_duplicates(subset=["APPLICANT"], keep="first")
 
     # Keep only people who can fit into 3 meetings: Friday 9am + at least 2 weekdays at 11am.
-    # Anyone who can't is not considered for this cohort (per boss).
+    # Anyone who can't is excluded for availability (listed at bottom of report).
     fittable = is_fittable_for_three_meetings(cohort_a)
+    excluded_for_availability = cohort_a.loc[~fittable].copy()
     cohort_a = cohort_a.loc[fittable[fittable].index].copy()
     # Cap at max_size, in preference order (1st choice already first).
     cohort_selected = cohort_a.head(args.max_size).copy()
@@ -56,6 +57,7 @@ def main():
     report = format_three_meetings_each_report(
         result,
         cohort_name=cohort_label,
+        excluded_for_availability=excluded_for_availability,
     )
 
     if args.output:

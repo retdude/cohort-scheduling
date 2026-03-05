@@ -717,6 +717,15 @@ def _row_name_email(row: pd.Series) -> str:
     return str(name)
 
 
+def _row_name_email_offer(row: pd.Series) -> str:
+    """Format a row as 'Name — email (1st choice)' or '(2nd choice)' when OFFER is present."""
+    base = _row_name_email(row)
+    offer = row.get("OFFER", None)
+    if pd.notna(offer) and offer:
+        return f"{base} ({offer})"
+    return base
+
+
 def format_three_meeting_report(partition: dict | None, cohort_name: str = "Cohort A + Either") -> str:
     """Format a readable report for the three-meeting (1 full + 2 split) schedule."""
     if partition is None:
@@ -754,8 +763,14 @@ def format_three_meeting_report(partition: dict | None, cohort_name: str = "Coho
     return "\n".join(lines)
 
 
-def format_three_meetings_each_report(result: dict | None, cohort_name: str = "Cohort A + Either") -> str:
-    """Format report when every person attends 3 meetings (anchor + 2 other days)."""
+def format_three_meetings_each_report(
+    result: dict | None,
+    cohort_name: str = "Cohort A + Either",
+    excluded_for_availability: pd.DataFrame | None = None,
+) -> str:
+    """Format report when every person attends 3 meetings (anchor + 2 other days).
+    excluded_for_availability: people from the pool who were excluded because they couldn't fit 3 meetings.
+    """
     if result is None:
         return f"{cohort_name}: No valid schedule found.\n"
     n = len(result["anchor_available_df"])
@@ -772,9 +787,9 @@ def format_three_meetings_each_report(result: dict | None, cohort_name: str = "C
         f"  Attendees: {len(result['anchor_available_df'])} people",
         "",
     ]
-    # Full-cohort meeting: list everyone with name and email.
+    # Full-cohort meeting: list everyone with name, email, and choice (1st/2nd).
     for _, row in result["anchor_available_df"].iterrows():
-        lines.append(f"  - {_row_name_email(row)}")
+        lines.append(f"  - {_row_name_email_offer(row)}")
     lines.append("")
 
     # Meetings 2–5: one section per weekday (Mon–Thu) with that day's attendees.
@@ -787,35 +802,47 @@ def format_three_meetings_each_report(result: dict | None, cohort_name: str = "C
         lines.append(f"  Attendees: {len(df)} people")
         lines.append("")
         for _, row in df.iterrows():
-            lines.append(f"  - {_row_name_email(row)}")
+            lines.append(f"  - {_row_name_email_offer(row)}")
         lines.append("")
 
-    # Per-person schedule: each person's 3 meetings (Fri + 2 weekdays).
+    # Per-person schedule: each person's 3 meetings (Fri + 2 weekdays), with choice.
     lines.append("Per-person schedule (3 meetings each):")
     lines.append("-" * 40)
     cohort = result["cohort_df"]
     name_col = APPLICANT_COL if APPLICANT_COL in cohort.columns else "name"
     for idx in result.get("person_to_days", {}):
         row = cohort.loc[idx]
-        name = row.get(name_col, "?")
-        email = row.get("EMAIL Address", row.get("EMAIL", ""))
-        days = result["person_to_days"][idx]
-        s = f"  {name}"
-        if email:
-            s += f" — {email}"
-        s += f":  Friday 9am, {days[0]} {slot_label}, {days[1]} {slot_label}"
-        lines.append(s)
+        line = f"  {_row_name_email_offer(row)}:  Friday 9am, {result['person_to_days'][idx][0]} {slot_label}, {result['person_to_days'][idx][1]} {slot_label}"
+        lines.append(line)
     lines.append("")
 
-    # If any couldn't make Friday or had < 2 weekdays, list them for alternate candidate consideration.
+    # At the bottom: everyone excluded for availability reasons (couldn't fit into 3 meetings).
+    if excluded_for_availability is not None and len(excluded_for_availability) > 0:
+        lines.append("Excluded for availability reasons (could not fit into 3 meetings):")
+        lines.append("-" * 55)
+        for _, row in excluded_for_availability.iterrows():
+            can_anchor = _available_for_slot(row, ANCHOR_SLOT_COL, ANCHOR_DAY)
+            if not can_anchor:
+                reason = "cannot attend Friday 9am"
+            else:
+                n_weekdays = sum(
+                    1
+                    for day in WEEKDAYS_NO_FRIDAY
+                    if _available_for_slot(row, SPLIT_MEETING_SLOT_COL, day)
+                )
+                reason = "fewer than 2 weekdays available for second/third meeting" if n_weekdays < 2 else "could not be assigned"
+            lines.append(f"  - {_row_name_email_offer(row)}  → {reason}")
+        lines.append("")
+
+    # If any in the selected cohort couldn't make Friday or had < 2 weekdays (edge case), list them.
     limited_df = result.get("limited_df", pd.DataFrame())
     not_anchor = result["not_anchor_available_df"]
     if len(not_anchor) or len(limited_df):
         lines.append("Limited availability (consider alternate candidate if needed):")
         for _, row in not_anchor.iterrows():
-            lines.append(f"  - {_row_name_email(row)} (cannot attend Friday 9am)")
+            lines.append(f"  - {_row_name_email_offer(row)} (cannot attend Friday 9am)")
         for _, row in limited_df.iterrows():
-            lines.append(f"  - {_row_name_email(row)} (fewer than 2 other days available for second/third meeting)")
+            lines.append(f"  - {_row_name_email_offer(row)} (fewer than 2 other days available for second/third meeting)")
         lines.append("")
     return "\n".join(lines)
 
