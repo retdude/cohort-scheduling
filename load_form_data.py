@@ -466,6 +466,13 @@ SPLIT_MEETING_SLOT_COL = "Times_11am-1pm_PT"
 WEEKDAYS_NO_FRIDAY = ["Monday", "Tuesday", "Wednesday", "Thursday"]
 OFFER_SECOND_CHOICE = "2nd choice"  # Used when including 2nd choice to reach target cohort size.
 
+# ---------------------------------------------------------------------------
+# Two-session model (new plan): Monday/Tuesday = remote independent work.
+# Each student: Friday 9am (all-hands) + EITHER Wednesday 11am XOR Thursday 11am.
+# ---------------------------------------------------------------------------
+WED_THU_DAYS = ["Wednesday", "Thursday"]
+WED_THU_SLOT_COL = "Times_11am-1pm_PT"  # 11am slot for Wed and Thu only.
+
 
 def cohort_available_for_anchor(cohort_df: pd.DataFrame) -> pd.DataFrame:
     """Restrict to people who can attend the anchor meeting (Friday 9am–11am PT)."""
@@ -627,6 +634,35 @@ def is_fittable_for_three_meetings(
     return can_anchor & (weekday_count >= 2)
 
 
+def is_fittable_for_two_meetings(
+    cohort_df: pd.DataFrame,
+    *,
+    anchor_day: str = ANCHOR_DAY,
+    anchor_slot_col: str = ANCHOR_SLOT_COL,
+    wed_thu_days: list[str] | None = None,
+    wed_thu_slot_col: str = WED_THU_SLOT_COL,
+    treat_flexible_as_any_slot: bool = True,
+) -> pd.Series:
+    """
+    Boolean Series: True if person can attend Friday 9am AND (Wednesday 11am OR Thursday 11am).
+    Used for the 2-session model: Fri all-hands + either Wed XOR Thu.
+    """
+    if wed_thu_days is None:
+        wed_thu_days = WED_THU_DAYS
+    can_anchor = cohort_df.apply(
+        lambda row: _available_for_slot(row, anchor_slot_col, anchor_day, treat_flexible_as_any_slot),
+        axis=1,
+    )
+    can_wed_or_thu = pd.Series(index=cohort_df.index, dtype=bool)
+    for idx in cohort_df.index:
+        row = cohort_df.loc[idx]
+        can_wed_or_thu[idx] = any(
+            _available_for_slot(row, wed_thu_slot_col, day, treat_flexible_as_any_slot)
+            for day in wed_thu_days
+        )
+    return can_anchor & can_wed_or_thu
+
+
 def find_three_meetings_each(
     cohort_df: pd.DataFrame,
     *,
@@ -705,6 +741,77 @@ def find_three_meetings_each(
         "person_to_days": person_to_days,
         "day_to_indices": day_to_indices,
         "day_to_df": {d: cohort.loc[day_to_indices[d]] for d in WEEKDAYS_NO_FRIDAY},
+    }
+
+
+def find_two_meetings_each(
+    cohort_df: pd.DataFrame,
+    *,
+    anchor_day: str = ANCHOR_DAY,
+    anchor_slot_col: str = ANCHOR_SLOT_COL,
+    wed_thu_days: list[str] | None = None,
+    wed_thu_slot_col: str = WED_THU_SLOT_COL,
+    treat_flexible_as_any_slot: bool = True,
+) -> dict | None:
+    """
+    Two-session model: each person attends Friday 9am (all-hands) + either Wednesday 11am XOR Thursday 11am.
+    Assigns each person to Wed or Thu (greedy balance). Returns dict with anchor_available_df, wed_df, thu_df,
+    person_to_day (idx -> "Wednesday" | "Thursday"), wed_thu_slot_label, cohort_df, not_anchor_available_df.
+    """
+    if wed_thu_days is None:
+        wed_thu_days = WED_THU_DAYS
+    anchor_available = cohort_df[
+        cohort_df.apply(
+            lambda row: _available_for_slot(row, anchor_slot_col, anchor_day, treat_flexible_as_any_slot),
+            axis=1,
+        )
+    ].copy()
+    not_anchor = cohort_df.drop(index=anchor_available.index, errors="ignore")
+    cohort = anchor_available
+    if len(cohort) == 0:
+        return None
+    indices = list(cohort.index)
+    # For each person: can Wed? can Thu?
+    available_day: dict[int, list[str]] = {}
+    for idx in indices:
+        row = cohort.loc[idx]
+        avail = [
+            d for d in wed_thu_days
+            if _available_for_slot(row, wed_thu_slot_col, d, treat_flexible_as_any_slot)
+        ]
+        available_day[idx] = avail
+    # Anyone with neither Wed nor Thu cannot be assigned (should not happen if pre-filtered by is_fittable_for_two_meetings).
+    limited = [idx for idx in indices if len(available_day[idx]) < 1]
+    cohort_valid = cohort.drop(index=limited, errors="ignore")
+    if len(cohort_valid) == 0:
+        return None
+    indices_valid = list(cohort_valid.index)
+    # Assign each to Wed or Thu: prefer the day with smaller current count (balance).
+    day_counts: dict[str, int] = {d: 0 for d in wed_thu_days}
+    person_to_day: dict[int, str] = {}
+    for idx in indices_valid:
+        avail = available_day[idx]
+        if len(avail) == 1:
+            d = avail[0]
+        else:
+            d = min(avail, key=lambda x: (day_counts[x], x))
+        person_to_day[idx] = d
+        day_counts[d] += 1
+    wed_indices = [idx for idx, d in person_to_day.items() if d == "Wednesday"]
+    thu_indices = [idx for idx, d in person_to_day.items() if d == "Thursday"]
+    wed_thu_slot_label = SLOT_LABELS.get(wed_thu_slot_col, wed_thu_slot_col)
+    return {
+        "anchor_available_df": anchor_available,
+        "not_anchor_available_df": not_anchor,
+        "cohort_df": cohort,
+        "limited_df": cohort.loc[limited] if limited else pd.DataFrame(),
+        "wed_thu_slot_col": wed_thu_slot_col,
+        "wed_thu_slot_label": wed_thu_slot_label,
+        "person_to_day": person_to_day,
+        "wed_df": cohort.loc[wed_indices],
+        "thu_df": cohort.loc[thu_indices],
+        "wed_indices": wed_indices,
+        "thu_indices": thu_indices,
     }
 
 
@@ -798,6 +905,72 @@ def three_meetings_schedule_by_meeting_to_dataframe(result: dict | None) -> pd.D
                 "Email": row.get(email_col, "") if pd.notna(row.get(email_col, "")) else "",
                 "Choice": row.get("OFFER", "") if pd.notna(row.get("OFFER", "")) else "",
             })
+    return pd.DataFrame(rows)
+
+
+def two_meetings_schedule_to_dataframe(result: dict | None) -> pd.DataFrame:
+    """
+    Build a DataFrame of the 2-session schedule for CSV/Google Sheets export.
+    Columns: Name, Email, Choice, Meeting 1 (Friday 9am), Meeting 2 (Wednesday or Thursday 11am).
+    """
+    if result is None or not result.get("person_to_day"):
+        return pd.DataFrame(columns=["Name", "Email", "Choice", "Meeting 1", "Meeting 2"])
+    cohort = result["cohort_df"]
+    person_to_day = result["person_to_day"]
+    slot_label = result["wed_thu_slot_label"]
+    name_col = APPLICANT_COL if APPLICANT_COL in cohort.columns else "name"
+    email_col = "EMAIL Address" if "EMAIL Address" in cohort.columns else "EMAIL"
+    meeting_1_label = "Friday 9am–11am PT"
+    rows = []
+    for idx in person_to_day:
+        row = cohort.loc[idx]
+        day = person_to_day[idx]
+        rows.append({
+            "Name": row.get(name_col, "?"),
+            "Email": row.get(email_col, "") if pd.notna(row.get(email_col, "")) else "",
+            "Choice": row.get("OFFER", "") if pd.notna(row.get("OFFER", "")) else "",
+            "Meeting 1": meeting_1_label,
+            "Meeting 2": f"{day} {slot_label}",
+        })
+    return pd.DataFrame(rows)
+
+
+def two_meetings_schedule_by_meeting_to_dataframe(result: dict | None) -> pd.DataFrame:
+    """
+    Build a DataFrame of the 2-session schedule grouped by meeting for Google Sheets.
+    Each row = one attendee in one meeting. Columns: Meeting, Day & Time, Name, Email, Choice.
+    """
+    if result is None:
+        return pd.DataFrame(columns=["Meeting", "Day & Time", "Name", "Email", "Choice"])
+    name_col = APPLICANT_COL if APPLICANT_COL in result["cohort_df"].columns else "name"
+    email_col = "EMAIL Address" if "EMAIL Address" in result["cohort_df"].columns else "EMAIL"
+    anchor_label = f"{ANCHOR_DAY} at {SLOT_LABELS.get(ANCHOR_SLOT_COL, ANCHOR_SLOT_COL)}"
+    slot_label = result["wed_thu_slot_label"]
+    rows = []
+    for _, row in result["anchor_available_df"].iterrows():
+        rows.append({
+            "Meeting": "Meeting 1 (everyone)",
+            "Day & Time": anchor_label,
+            "Name": row.get(name_col, "?"),
+            "Email": row.get(email_col, "") if pd.notna(row.get(email_col, "")) else "",
+            "Choice": row.get("OFFER", "") if pd.notna(row.get("OFFER", "")) else "",
+        })
+    for _, row in result["wed_df"].iterrows():
+        rows.append({
+            "Meeting": "Meeting 2 (Wednesday)",
+            "Day & Time": f"Wednesday at {slot_label}",
+            "Name": row.get(name_col, "?"),
+            "Email": row.get(email_col, "") if pd.notna(row.get(email_col, "")) else "",
+            "Choice": row.get("OFFER", "") if pd.notna(row.get("OFFER", "")) else "",
+        })
+    for _, row in result["thu_df"].iterrows():
+        rows.append({
+            "Meeting": "Meeting 3 (Thursday)",
+            "Day & Time": f"Thursday at {slot_label}",
+            "Name": row.get(name_col, "?"),
+            "Email": row.get(email_col, "") if pd.notna(row.get(email_col, "")) else "",
+            "Choice": row.get("OFFER", "") if pd.notna(row.get("OFFER", "")) else "",
+        })
     return pd.DataFrame(rows)
 
 
@@ -918,6 +1091,72 @@ def format_three_meetings_each_report(
             lines.append(f"  - {_row_name_email_offer(row)} (cannot attend Friday 9am)")
         for _, row in limited_df.iterrows():
             lines.append(f"  - {_row_name_email_offer(row)} (fewer than 2 other days available for second/third meeting)")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def format_two_meetings_each_report(
+    result: dict | None,
+    cohort_name: str = "Cohort A + Either",
+    excluded_for_availability: pd.DataFrame | None = None,
+) -> str:
+    """Format report for 2-session model: Friday 9am (everyone) + either Wednesday or Thursday 11am."""
+    if result is None:
+        return f"{cohort_name}: No valid schedule found.\n"
+    n = len(result["anchor_available_df"])
+    slot_label = result["wed_thu_slot_label"]
+    anchor_label = SLOT_LABELS.get(ANCHOR_SLOT_COL, ANCHOR_SLOT_COL)
+    lines = [
+        f"Two sessions per person per week — {cohort_name}",
+        "=" * 55,
+        "",
+        "Monday & Tuesday = remote independent work. Each person: Friday 9am (all-hands) + EITHER Wednesday 11am XOR Thursday 11am.",
+        "",
+        f"Selected: {n} people (1st choice preferred, then 2nd; only those who can make Friday 9am and Wed or Thu 11am).",
+        "",
+        "Meeting 1 (everyone):",
+        f"  {ANCHOR_DAY} at {anchor_label}",
+        f"  Attendees: {len(result['anchor_available_df'])} people",
+        "",
+    ]
+    for _, row in result["anchor_available_df"].iterrows():
+        lines.append(f"  - {_row_name_email_offer(row)}")
+    lines.append("")
+    lines.append(f"Meeting 2 (Wednesday) at {slot_label}:")
+    lines.append(f"  Attendees: {len(result['wed_df'])} people")
+    lines.append("")
+    for _, row in result["wed_df"].iterrows():
+        lines.append(f"  - {_row_name_email_offer(row)}")
+    lines.append("")
+    lines.append(f"Meeting 3 (Thursday) at {slot_label}:")
+    lines.append(f"  Attendees: {len(result['thu_df'])} people")
+    lines.append("")
+    for _, row in result["thu_df"].iterrows():
+        lines.append(f"  - {_row_name_email_offer(row)}")
+    lines.append("")
+    lines.append("Per-person schedule (2 sessions each):")
+    lines.append("-" * 40)
+    cohort = result["cohort_df"]
+    for idx in result.get("person_to_day", {}):
+        row = cohort.loc[idx]
+        day = result["person_to_day"][idx]
+        lines.append(f"  {_row_name_email_offer(row)}:  Friday 9am, {day} {slot_label}")
+    lines.append("")
+    if excluded_for_availability is not None and len(excluded_for_availability) > 0:
+        lines.append("Excluded for availability reasons (cannot fit 2 sessions):")
+        lines.append("-" * 55)
+        for _, row in excluded_for_availability.iterrows():
+            can_anchor = _available_for_slot(row, ANCHOR_SLOT_COL, ANCHOR_DAY)
+            if not can_anchor:
+                reason = "cannot attend Friday 9am"
+            else:
+                can_wed = _available_for_slot(row, WED_THU_SLOT_COL, "Wednesday")
+                can_thu = _available_for_slot(row, WED_THU_SLOT_COL, "Thursday")
+                if not can_wed and not can_thu:
+                    reason = "cannot attend Wednesday or Thursday 11am"
+                else:
+                    reason = "could not be assigned"
+            lines.append(f"  - {_row_name_email_offer(row)}  → {reason}")
         lines.append("")
     return "\n".join(lines)
 
