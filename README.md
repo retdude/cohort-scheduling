@@ -1,14 +1,6 @@
 # Meeting Time Scheduling
 
-Schedule focus-group meetings from Google Form availability and a candidates list. Merges form + candidates by name, splits by cohort, finds common (day, time) slots, and builds a **three-meetings-per-person** weekly schedule (Fri full cohort + 2 weekdays) with selection by availability and 1st/2nd choice preference.
-
----
-
-**GitHub repo description** (paste into *About* → *Description*):
-
-> Schedule meetings from form availability + candidates CSV. Cohort split, common-slot finder, and three meetings per person (Fri + 2 weekdays) with 1st/2nd choice and availability-based selection. Python, pandas.
-
----
+Finds a day and time when as many people as possible (ideally everyone) in each cohort can attend, using Google Form availability responses and a candidates list.
 
 ## What it does
 
