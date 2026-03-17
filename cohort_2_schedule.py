@@ -90,34 +90,46 @@ def best_availability_counts(cohort_df: pd.DataFrame) -> list[tuple[str, str, in
     return out
 
 
+# Days allowed for non-anchor sessions (no Monday: cohort needs time to review material).
+COHORT2_NON_ANCHOR_DAYS = ["Tuesday", "Wednesday", "Thursday"]
+
+
 def find_anchor_and_two_sessions(
     cohort_df: pd.DataFrame,
     *,
     treat_flexible_as_any_slot: bool = True,
+    anchor_day_fixed: str | None = "Friday",
+    non_anchor_days: list[str] | None = None,
 ) -> dict | None:
     """
-    Pick anchor = (day, slot) with max availability; pick 2 other (day, slot) on other days.
+    Pick anchor = Friday (best slot); pick 2 other (day, slot) on Tue/Wed/Thu only (no Monday).
+    Two sessions can be on the same day (e.g. two Thursday slots) if needed.
     Each person attends anchor + one of the other two (balanced). Exclude anyone who can only do 1 session.
     Returns dict with anchor_day, anchor_slot_col, anchor_label, session_2_*, session_3_*,
     anchor_df, session_2_df, session_3_df, person_to_second_session, cohort_df, excluded_df.
     """
     if cohort_df.empty:
         return None
-    # Count available per (day, slot)
+    if non_anchor_days is None:
+        non_anchor_days = COHORT2_NON_ANCHOR_DAYS
     slot_cols = [c for c in COHORT2_SLOT_COLS if c in cohort_df.columns]
     if not slot_cols:
         return None
+
+    # Anchor: Friday only (best Friday slot by availability)
+    anchor_day = anchor_day_fixed if anchor_day_fixed else "Friday"
     best_anchor = None
     best_count = 0
     for slot_col in slot_cols:
-        for day in WEEKDAYS:
-            count = sum(
-                1 for _, row in cohort_df.iterrows()
-                if _available_for_slot_cohort2(row, slot_col, day, treat_flexible_as_any_slot)
-            )
-            if count > best_count:
-                best_count = count
-                best_anchor = (day, slot_col)
+        if anchor_day not in WEEKDAYS:
+            break
+        count = sum(
+            1 for _, row in cohort_df.iterrows()
+            if _available_for_slot_cohort2(row, slot_col, anchor_day, treat_flexible_as_any_slot)
+        )
+        if count > best_count:
+            best_count = count
+            best_anchor = (anchor_day, slot_col)
     if best_anchor is None:
         return None
     anchor_day, anchor_slot_col = best_anchor
@@ -132,11 +144,11 @@ def find_anchor_and_two_sessions(
     if len(anchor_df) == 0:
         return None
 
-    # Other (day, slot) options: day != anchor_day
+    # Other (day, slot) options: only Tue/Wed/Thu (no Monday); same day allowed twice (e.g. two Thursday slots)
     other_options: list[tuple[str, str, int]] = []
     for slot_col in slot_cols:
-        for day in WEEKDAYS:
-            if day == anchor_day:
+        for day in non_anchor_days:
+            if day not in WEEKDAYS:
                 continue
             count = sum(
                 1 for _, row in anchor_df.iterrows()
@@ -146,19 +158,14 @@ def find_anchor_and_two_sessions(
                 other_options.append((day, slot_col, count))
     other_options.sort(key=lambda x: -x[2])
 
-    # Pick session_2 and session_3: two different days (best coverage)
+    # Pick session_2 and session_3: top 2 (day, slot) by count; can be same day (e.g. two Thursday times)
     session_2 = None
     session_3 = None
-    seen_days = set()
     for day, slot_col, _ in other_options:
-        if day in seen_days:
-            continue
         if session_2 is None:
             session_2 = (day, slot_col)
-            seen_days.add(day)
-        elif session_3 is None:
+        elif session_3 is None and (day, slot_col) != session_2:
             session_3 = (day, slot_col)
-            seen_days.add(day)
             break
     if session_2 is None or session_3 is None:
         return None
@@ -254,7 +261,7 @@ def format_two_sessions_report(result: dict | None, cohort_name: str = "Cohort 2
         f"Two sessions per person — {cohort_name}",
         "=" * 50,
         "",
-        "Company holds 3 sessions (no two on the same day). Each student attends the anchor + one other session.",
+        "Company holds 3 sessions: 1 Friday anchor + 2 others (Tue/Wed/Thu only; no Monday). Two sessions can be on the same day (e.g. both Thursday). Each student attends the anchor + one other session.",
         "",
         f"Anchor session (everyone in cohort): {result['anchor_label']}",
         f"  Attendees: {len(scheduled_anchor_df)} people",
