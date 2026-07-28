@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-July cohort scheduling from data/JULY_COHORT.csv.
+July cohort — OPTION A: one session per meeting (maximize majority).
 
 Needs:
 - Friday orientation (Jul 31)
@@ -9,6 +9,7 @@ Needs:
 - A couple of office hours next week (Aug 3–7)
 
 Applies free-text constraints from the form notes.
+See july_cohort_schedule_split.py for OPTION B (Friday all-hands + split feedback).
 """
 from __future__ import annotations
 
@@ -17,6 +18,8 @@ from pathlib import Path
 
 DATA_PATH = Path(__file__).resolve().parent / "data" / "JULY_COHORT.csv"
 REPORT_PATH = Path(__file__).resolve().parent / "reports" / "july_cohort_schedule.txt"
+# Companion Option B (split sessions): july_cohort_schedule_split.py
+# → reports/july_cohort_schedule_option_b_split.txt
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
@@ -99,10 +102,11 @@ def build_report(rows: list[dict[str, str]], nonflex: list[str], flex_col: str) 
     def p(s: str = "") -> None:
         lines.append(s)
 
-    p("July Cohort Scheduling Recommendations")
+    p("July Cohort — OPTION A: Single Session (majority)")
     p("=" * 50)
     p(f"Cohort size: {n}")
     p("Source: data/JULY_COHORT.csv")
+    p("Companion: reports/july_cohort_schedule_option_b_split.txt (OPTION B — split sessions)")
     p("")
     p("Constraints applied from free-text notes:")
     p("  - Steven: unavailable Fri Jul 31 (cross-state travel)")
@@ -188,7 +192,7 @@ def build_report(rows: list[dict[str, str]], nonflex: list[str], flex_col: str) 
     p("  Offer Elizabeth async/written feedback or a 1:1 outside that week.")
     p("")
 
-    p("SUMMARY — proposed calendar")
+    p("SUMMARY — OPTION A calendar")
     p("=" * 50)
     p("  Fri Jul 31   9:00–11:00am PT   Orientation         (~10/12)")
     p("  Mon Aug 3   11:00am–1:00pm PT  Office hours         (~9/12)")
